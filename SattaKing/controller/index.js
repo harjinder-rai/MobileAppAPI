@@ -42,8 +42,12 @@ const getMonthWiseChart = async (req, res) => {
       date: { $regex: date }
     });
 
+    let responseData = chartData.sort((a, b) => {
+      return new Date(a.date) - new Date(b.date);
+    });
+
     return res.status(200).json({ 
-      monthlyChart: chartData,
+      monthlyChart: responseData,
       month: month,
       year: fullYear,
       searchPattern: date
