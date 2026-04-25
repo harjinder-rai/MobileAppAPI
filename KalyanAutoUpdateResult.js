@@ -43,7 +43,7 @@ async function scrapeDpbossResults() {
 }
 
 async function updateKalyanResults() {
-  const mongoUrl = process.env.MONGODB_URI || process.env.DATABASE;
+  const mongoUrl = process.env.MONGODB_URI;
   let shouldDisconnect = false;
 
   if (!mongoUrl) {
