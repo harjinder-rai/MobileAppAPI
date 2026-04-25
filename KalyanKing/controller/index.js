@@ -1,6 +1,9 @@
 const LiveResult = require("../modals/liveresult.model");
 const LuckyNumber = require("../modals/luckynumber.model");
-const { updateKalyanResults } = require("../../KalyanAutoUpdateResult");
+const {
+  updateKalyanResults,
+  getTestingLiveResults: getTestingLiveResultsFromCollection,
+} = require("../../KalyanAutoUpdateResult");
 
 const getLiveResults = async (req, res) => {
   LiveResult.find()
@@ -71,10 +74,28 @@ const autoUpdateLiveResult = async (req, res) => {
   }
 };
 
+const getTestingLiveResults = async (req, res) => {
+  try {
+    const testingLiveResults = await getTestingLiveResultsFromCollection();
+
+    return res.status(200).json({
+      testingLiveResults,
+    });
+  } catch (error) {
+    console.error("Get testing live results failed:", error.message);
+
+    return res.status(500).json({
+      message: "Get testing live results failed",
+      error: error.message,
+    });
+  }
+};
+
 module.exports = {
   getLiveResults,
   updateLiveResult,
   getLuckyNumber,
   autoUpdateLiveResult,
+  getTestingLiveResults,
 };
 
