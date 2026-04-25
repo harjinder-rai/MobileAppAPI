@@ -194,10 +194,15 @@ async function updateKalyanResults() {
       matchedResults.push({
         scrapedName: scrapedResult.gameName,
         matchedName,
+        oldResult: matchedDoc.result,
         result: scrapedResult.result,
         openTime: scrapedResult.openTime,
         closeTime: scrapedResult.closeTime,
       });
+
+      if (cleanText(matchedDoc.result) === cleanText(scrapedResult.result)) {
+        continue;
+      }
 
       const updateData = {
         result: scrapedResult.result,
@@ -239,8 +244,6 @@ async function updateKalyanResults() {
         { gameName: { $nin: updatedResultNames } },
         { $set: { isTop: false } }
       );
-    } else {
-      await Result.updateMany({}, { $set: { isTop: false } });
     }
 
     return {
