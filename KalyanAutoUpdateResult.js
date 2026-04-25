@@ -20,6 +20,25 @@ const kalyanDb = mongoose.connection.useDb("KalyanKing");
 const Result = kalyanDb.model("Result", resultSchema, "liveresult");
 
 
+async function ensureMongoConnected() {
+  if (mongoose.connection.readyState === 1) {
+    return;
+  }
+
+  if (mongoose.connection.readyState === 2) {
+    await mongoose.connection.asPromise();
+    return;
+  }
+
+  const mongoUrl = process.env.MONGODB_URI || process.env.DATABASE;
+
+  if (!mongoUrl) {
+    throw new Error("MONGODB_URI or DATABASE is missing in .env");
+  }
+
+  await mongoose.connect(mongoUrl);
+}
+
 function normalizeName(name) {
   return String(name || "").trim().toLowerCase();
 }
@@ -44,31 +63,15 @@ function isResultValue(text) {
 }
 
 async function getTestingLiveResults() {
-  const mongoUrl = process.env.MONGODB_URI || process.env.DATABASE;
-  let shouldDisconnect = false;
+  await ensureMongoConnected();
 
-  if (mongoose.connection.readyState === 0) {
-    if (!mongoUrl) {
-      throw new Error("MONGODB_URI or DATABASE is missing in .env");
-    }
+  const testingLiveResults = await Result.find(
+    {},
+    "gameName openTime closeTime result isTop"
+  ).lean();
 
-    await mongoose.connect(mongoUrl);
-    shouldDisconnect = true;
-  }
-
-  try {
-    const testingLiveResults = await Result.find(
-      {},
-      "gameName openTime closeTime result isTop"
-    ).lean();
-
-    console.log("testingLiveResult documents:", testingLiveResults);
-    return testingLiveResults;
-  } finally {
-    if (shouldDisconnect) {
-      await mongoose.disconnect();
-    }
-  }
+  console.log("testingLiveResult documents:", testingLiveResults);
+  return testingLiveResults;
 }
 
 async function scrapeDpbossResults() {
@@ -151,120 +154,103 @@ async function scrapeDpbossResults() {
 }
 
 async function updateKalyanResults() {
-  const mongoUrl = process.env.MONGODB_URI || process.env.DATABASE;
-  let shouldDisconnect = false;
+  await ensureMongoConnected();
 
+  const existingDocs = await Result.find(
+    {},
+    "gameName openTime closeTime result isTop"
+  ).lean();
+  const existingByName = new Map(
+    existingDocs.map((doc) => [normalizeName(doc.gameName), doc])
+  );
 
-  if (mongoose.connection.readyState === 0) {
-    if (!mongoUrl) {
-      throw new Error("MONGODB_URI or DATABASE is missing in .env");
+  const scrapedResults = await scrapeDpbossResults();
+  const matchedDatabaseResults = [];
+  const matchedResults = [];
+  const operations = [];
+  const updatedResultNames = [];
+  const updatedResults = [];
+  let firstUpdated = true;
+
+  for (const scrapedResult of scrapedResults) {
+    const matchedDoc = existingByName.get(normalizeName(scrapedResult.gameName));
+
+    if (!matchedDoc) {
+      continue;
     }
 
-    await mongoose.connect(mongoUrl);
-    shouldDisconnect = true;
-  }
+    const matchedName = matchedDoc.gameName;
 
-  try {
-    const existingDocs = await Result.find(
-      {},
-      "gameName openTime closeTime result isTop"
-    ).lean();
-    const existingByName = new Map(
-      existingDocs.map((doc) => [normalizeName(doc.gameName), doc])
-    );
+    matchedDatabaseResults.push(matchedDoc);
+    matchedResults.push({
+      scrapedName: scrapedResult.gameName,
+      matchedName,
+      oldResult: matchedDoc.result,
+      result: scrapedResult.result,
+      openTime: scrapedResult.openTime,
+      closeTime: scrapedResult.closeTime,
+    });
 
-    const scrapedResults = await scrapeDpbossResults();
-    const matchedDatabaseResults = [];
-    const matchedResults = [];
-    const operations = [];
-    const updatedResultNames = [];
-    const updatedResults = [];
-    let firstUpdated = true;
-
-    for (const scrapedResult of scrapedResults) {
-      const matchedDoc = existingByName.get(normalizeName(scrapedResult.gameName));
-
-      if (!matchedDoc) {
-        continue;
-      }
-
-      const matchedName = matchedDoc.gameName;
-
-      matchedDatabaseResults.push(matchedDoc);
-      matchedResults.push({
-        scrapedName: scrapedResult.gameName,
-        matchedName,
-        oldResult: matchedDoc.result,
-        result: scrapedResult.result,
-        openTime: scrapedResult.openTime,
-        closeTime: scrapedResult.closeTime,
-      });
-
-      if (cleanText(matchedDoc.result) === cleanText(scrapedResult.result)) {
-        continue;
-      }
-
-      const updateData = {
-        result: scrapedResult.result,
-        isTop: firstUpdated,
-      };
-
-      if (scrapedResult.openTime) {
-        updateData.openTime = scrapedResult.openTime;
-      }
-
-      if (scrapedResult.closeTime) {
-        updateData.closeTime = scrapedResult.closeTime;
-      }
-
-      operations.push({
-        updateOne: {
-          filter: { gameName: matchedName },
-          update: {
-            $set: updateData,
-          },
-        },
-      });
-
-      updatedResultNames.push(matchedName);
-      updatedResults.push({
-        gameName: matchedName,
-        result: scrapedResult.result,
-        openTime: scrapedResult.openTime,
-        closeTime: scrapedResult.closeTime,
-        isTop: firstUpdated,
-      });
-      firstUpdated = false;
+    if (cleanText(matchedDoc.result) === cleanText(scrapedResult.result)) {
+      continue;
     }
 
-
-    if (operations.length > 0) {
-      await Result.bulkWrite(operations);
-      await Result.updateMany(
-        { gameName: { $nin: updatedResultNames } },
-        { $set: { isTop: false } }
-      );
-    }
-
-    return {
-      updatedCount: updatedResults.length,
-      updatedResults,
-      debug: {
-        collectionName: Result.collection.name,
-        dbName: Result.db.name,
-        existingCount: existingDocs.length,
-        scrapedCount: scrapedResults.length,
-        scrapedResults,
-        matchedCount: matchedResults.length,
-        matchedDatabaseNames: matchedDatabaseResults.map((doc) => doc.gameName),
-        matchedScrapedResults: matchedResults,
-      },
+    const updateData = {
+      result: scrapedResult.result,
+      isTop: firstUpdated,
     };
-  } finally {
-    if (shouldDisconnect) {
-      await mongoose.disconnect();
+
+    if (scrapedResult.openTime) {
+      updateData.openTime = scrapedResult.openTime;
     }
+
+    if (scrapedResult.closeTime) {
+      updateData.closeTime = scrapedResult.closeTime;
+    }
+
+    operations.push({
+      updateOne: {
+        filter: { gameName: matchedName },
+        update: {
+          $set: updateData,
+        },
+      },
+    });
+
+    updatedResultNames.push(matchedName);
+    updatedResults.push({
+      gameName: matchedName,
+      result: scrapedResult.result,
+      openTime: scrapedResult.openTime,
+      closeTime: scrapedResult.closeTime,
+      isTop: firstUpdated,
+    });
+    firstUpdated = false;
   }
+
+
+  if (operations.length > 0) {
+    await Result.bulkWrite(operations);
+    await Result.updateMany(
+      { gameName: { $nin: updatedResultNames } },
+      { $set: { isTop: false } }
+    );
+  }
+
+  return {
+    updatedCount: updatedResults.length,
+    updatedResults,
+    debug: {
+      collectionName: Result.collection.name,
+      dbName: Result.db.name,
+      existingCount: existingDocs.length,
+      scrapedCount: scrapedResults.length,
+      scrapedResults,
+      matchedCount: matchedResults.length,
+      matchedDatabaseNames: matchedDatabaseResults.map((doc) => doc.gameName),
+      matchedScrapedResults: matchedResults,
+    },
+  };
 }
 
 if (require.main === module) {
