@@ -19,7 +19,7 @@ const resultSchema = new mongoose.Schema(
 const kalyanDb = mongoose.connection.useDb("KalyanKing");
 const Result =
   kalyanDb.models.Result ||
-  kalyanDb.model("Result", resultSchema, "testingLiveResult");
+  kalyanDb.model("Result", resultSchema, "liveresult");
 
 function normalizeName(name) {
   return String(name || "").trim().toLowerCase();
