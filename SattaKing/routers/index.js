@@ -12,6 +12,6 @@ router.get("/yearWiseChart", getYearWiseChart);
 
 router.post("/updateKhabar", updateDailyKhabar);
 
-
+// console.log("Router loaded");
 
 module.exports = router;
