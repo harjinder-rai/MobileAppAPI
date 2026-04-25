@@ -270,7 +270,6 @@ async function updateKalyanResults() {
 if (require.main === module) {
   updateKalyanResults()
     .then((summary) => {
-      console.log(`Updated ${summary.updatedCount} Kalyan results in MongoDB`);
       console.log("Updated results:", summary.updatedResults);
     })
     .catch((error) => {
