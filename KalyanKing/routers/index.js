@@ -13,7 +13,7 @@ router.get("/luckyNumber", getLuckyNumber);
 
 router.post("/updateLiveResult", updateLiveResult);
 
-router.post("/autoUpdateResult", autoUpdateLiveResult);
+router.get("/autoUpdateResult", autoUpdateLiveResult);
 
 module.exports = router;
 
