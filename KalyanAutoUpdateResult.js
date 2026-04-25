@@ -3,15 +3,31 @@ const cheerio = require("cheerio");
 const mongoose = require("mongoose");
 require("dotenv").config();
 
-const LiveResult = require("./KalyanKing/modals/liveresult.model");
-
 const DPBOSS_URL = "https://dpboss.boston/";
+
+const resultSchema = new mongoose.Schema(
+  {
+    gameName: { type: String, unique: true },
+    openTime: String,
+    closeTime: String,
+    result: String,
+    isTop: Boolean,
+  },
+  { timestamps: true }
+);
+
+const kalyanDb = mongoose.connection.useDb("KalyanKing");
+const Result =
+  kalyanDb.models.Result ||
+  kalyanDb.model("Result", resultSchema, "testingLiveResult");
 
 function normalizeName(name) {
   return String(name || "").trim().toLowerCase();
 }
 
 async function scrapeDpbossResults() {
+  console.log(`[KalyanAutoUpdate] Fetching ${DPBOSS_URL}`);
+
   const { data } = await axios.get(DPBOSS_URL, {
     headers: {
       "User-Agent": "Mozilla/5.0",
@@ -21,65 +37,91 @@ async function scrapeDpbossResults() {
 
   const $ = cheerio.load(data);
   const results = [];
+  const resultNameElements = $(".lv-mc span.h8");
 
-  $(".lv-mc span.h8").each((i, el) => {
-    const resultName = $(el).text().trim();
+  console.log(
+    `[KalyanAutoUpdate] Found ${resultNameElements.length} result name elements`
+  );
+
+  resultNameElements.each((i, el) => {
+    const gameName = $(el).text().trim();
     const resultSpan = $(el).next("span.h9");
 
-    if (!resultName || !resultSpan.length) {
+    if (!gameName || !resultSpan.length) {
       return;
     }
 
-    let todayResult = resultSpan.text().trim();
+    let result = resultSpan.text().trim();
 
-    if (todayResult.includes("Loading")) {
-      todayResult = "Loading";
+    if (result.includes("Loading")) {
+      result = "Loading";
     }
 
-    results.push({ resultName, todayResult });
+    results.push({ gameName, result });
   });
 
   return results;
 }
 
 async function updateKalyanResults() {
-  const mongoUrl = process.env.MONGODB_URI;
+  const mongoUrl = process.env.MONGODB_URI || process.env.DATABASE;
   let shouldDisconnect = false;
 
-  if (!mongoUrl) {
-    throw new Error("MONGODB_URI or DATABASE is missing in .env");
-  }
+  console.log(
+    `[KalyanAutoUpdate] Mongo readyState before update: ${mongoose.connection.readyState}`
+  );
 
   if (mongoose.connection.readyState === 0) {
+    if (!mongoUrl) {
+      throw new Error("MONGODB_URI or DATABASE is missing in .env");
+    }
+
     await mongoose.connect(mongoUrl);
     shouldDisconnect = true;
   }
 
   try {
-    const existingDocs = await LiveResult.find({}, "resultName").lean();
+    const existingDocs = await Result.find(
+      {},
+      "gameName openTime closeTime result isTop"
+    ).lean();
     const existingByName = new Map(
-      existingDocs.map((doc) => [normalizeName(doc.resultName), doc.resultName])
+      existingDocs.map((doc) => [normalizeName(doc.gameName), doc])
     );
 
     const scrapedResults = await scrapeDpbossResults();
+    const matchedDatabaseResults = [];
+    const matchedResults = [];
     const operations = [];
     const updatedResultNames = [];
     const updatedResults = [];
     let firstUpdated = true;
 
-    for (const scrapedResult of scrapedResults) {
-      const matchedName = existingByName.get(normalizeName(scrapedResult.resultName));
+    console.log(`[KalyanAutoUpdate] Existing Mongo records: ${existingDocs.length}`);
+    console.log(`[KalyanAutoUpdate] Scraped results: ${scrapedResults.length}`);
 
-      if (!matchedName) {
+    for (const scrapedResult of scrapedResults) {
+      const matchedDoc = existingByName.get(normalizeName(scrapedResult.gameName));
+
+      if (!matchedDoc) {
         continue;
       }
 
+      const matchedName = matchedDoc.gameName;
+
+      matchedDatabaseResults.push(matchedDoc);
+      matchedResults.push({
+        scrapedName: scrapedResult.gameName,
+        matchedName,
+        result: scrapedResult.result,
+      });
+
       operations.push({
         updateOne: {
-          filter: { resultName: matchedName },
+          filter: { gameName: matchedName },
           update: {
             $set: {
-              todayResult: scrapedResult.todayResult,
+              result: scrapedResult.result,
               isTop: firstUpdated,
             },
           },
@@ -88,26 +130,48 @@ async function updateKalyanResults() {
 
       updatedResultNames.push(matchedName);
       updatedResults.push({
-        resultName: matchedName,
-        todayResult: scrapedResult.todayResult,
+        gameName: matchedName,
+        result: scrapedResult.result,
         isTop: firstUpdated,
       });
       firstUpdated = false;
     }
 
+    console.log(
+      `[KalyanAutoUpdate] Matched database records: ${matchedDatabaseResults.length}`
+    );
+    console.log(
+      "[KalyanAutoUpdate] Matched database records only:",
+      matchedDatabaseResults
+    );
+    console.log(`[KalyanAutoUpdate] Matched results: ${matchedResults.length}`);
+    console.log(
+      "[KalyanAutoUpdate] Matched scraped results only:",
+      matchedResults
+    );
+
     if (operations.length > 0) {
-      await LiveResult.bulkWrite(operations);
-      await LiveResult.updateMany(
-        { resultName: { $nin: updatedResultNames } },
+      await Result.bulkWrite(operations);
+      await Result.updateMany(
+        { gameName: { $nin: updatedResultNames } },
         { $set: { isTop: false } }
       );
     } else {
-      await LiveResult.updateMany({}, { $set: { isTop: false } });
+      await Result.updateMany({}, { $set: { isTop: false } });
     }
 
     return {
       updatedCount: updatedResults.length,
       updatedResults,
+      debug: {
+        collectionName: Result.collection.name,
+        dbName: Result.db.name,
+        existingCount: existingDocs.length,
+        scrapedCount: scrapedResults.length,
+        matchedCount: matchedResults.length,
+        matchedDatabaseNames: matchedDatabaseResults.map((doc) => doc.gameName),
+        matchedScrapedResults: matchedResults,
+      },
     };
   } finally {
     if (shouldDisconnect) {
