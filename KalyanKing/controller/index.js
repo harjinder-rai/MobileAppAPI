@@ -1,5 +1,6 @@
 const LiveResult = require("../modals/liveresult.model");
 const LuckyNumber = require("../modals/luckynumber.model");
+const HistoricalChart = require('../modals/historicalchart.model');
 const {
   updateKalyanResults,
   getTestingLiveResults: getTestingLiveResultsFromCollection,
@@ -19,10 +20,10 @@ const getLiveResults = async (req, res) => {
 
 
 const getHistoricalData = async (req, res) => {
-  LiveResult.find()
-    .sort({ isTop: -1 })
+  HistoricalChart.find()
+    .sort({ index: -1 })
     .then((items) => {
-      return res.status(200).json({ liveResults: items });
+      return res.status(200).json({ historicalChart: items });
     })
     .catch(function () {
       console.log("error");
