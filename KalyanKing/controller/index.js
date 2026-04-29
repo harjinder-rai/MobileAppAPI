@@ -20,14 +20,33 @@ const getLiveResults = async (req, res) => {
 
 
 const getHistoricalData = async (req, res) => {
-  HistoricalChart.find()
-    .sort({ index: 1 })
-    .then((items) => {
-      return res.status(200).json({ historicalChart: items });
-    })
-    .catch(function () {
-      console.log("error");
+  try {
+    // 1. Extract parameters from the query string
+    const { game, month, year } = req.query;
+
+    // 2. Build a dynamic filter object
+    const filter = {};
+    
+    if (game) filter.gameName = game; // Maps 'game' param to 'gameName' field
+    if (month) filter.month = month;
+    if (year) filter.year = Number(year); // Ensure year is treated as a number
+
+    // 3. Execute the query with the filter
+    const items = await HistoricalChart.find(filter).sort({ index: 1 });
+
+    return res.status(200).json({ 
+      success: true,
+      count: items.length,
+      historicalChart: items 
     });
+
+  } catch (error) {
+    console.error("Error fetching historical data:", error);
+    return res.status(500).json({ 
+      success: false, 
+      message: "Internal Server Error" 
+    });
+  }
 };
 
 const getLuckyNumber = async (req, res) => {
