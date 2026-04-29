@@ -21,7 +21,7 @@ const getLiveResults = async (req, res) => {
 
 const getHistoricalData = async (req, res) => {
   HistoricalChart.find()
-    .sort({ index: -1 })
+    .sort({ index: 1 })
     .then((items) => {
       return res.status(200).json({ historicalChart: items });
     })
