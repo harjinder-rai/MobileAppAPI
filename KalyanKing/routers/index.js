@@ -6,6 +6,7 @@ const {
   getLuckyNumber,
   autoUpdateLiveResult,
   getTestingLiveResults,
+  getHistoricalData
 } = require("../controller");
 
 router.get("/liveResults", getLiveResults);
@@ -13,6 +14,9 @@ router.get("/liveResults", getLiveResults);
 router.get("/luckyNumber", getLuckyNumber);
 
 router.post("/updateLiveResult", updateLiveResult);
+
+router.post("/historicalData", getHistoricalData);
+
 
 router.get("/autoUpdateResult", autoUpdateLiveResult);
 

@@ -16,6 +16,19 @@ const getLiveResults = async (req, res) => {
     });
 };
 
+
+
+const getHistoricalData = async (req, res) => {
+  LiveResult.find()
+    .sort({ isTop: -1 })
+    .then((items) => {
+      return res.status(200).json({ liveResults: items });
+    })
+    .catch(function () {
+      console.log("error");
+    });
+};
+
 const getLuckyNumber = async (req, res) => {
   LuckyNumber.find()
     .then((data) => {
@@ -97,5 +110,6 @@ module.exports = {
   getLuckyNumber,
   autoUpdateLiveResult,
   getTestingLiveResults,
+  getHistoricalData
 };
 
