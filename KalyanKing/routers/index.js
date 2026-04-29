@@ -15,7 +15,7 @@ router.get("/luckyNumber", getLuckyNumber);
 
 router.post("/updateLiveResult", updateLiveResult);
 
-router.post("/historicalData", getHistoricalData);
+router.get("/historicalData", getHistoricalData);
 
 
 router.get("/autoUpdateResult", autoUpdateLiveResult);
