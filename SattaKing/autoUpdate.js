@@ -9,7 +9,6 @@ const mongoose = require('mongoose');
 
 // Ensure DB connection (DB/index.js already connects via mongoose)
 require('../DB'); // Connects using MONGODB_URI env variable
-
 // Import the Khabar model (uses SattaKing DB via useDb)
 const Khabar = require('./modals/khabar.model');
 
@@ -38,55 +37,89 @@ async function autoUpdateSattaKing() {
       return;
     }
 
+    // Collect scraped rows first
+    const scraped = [];
     const rows = table.find('tr');
-    for (let i = 0; i < rows.length; i++) {
-      const cells = $(rows[i]).find('td');
-      if (cells.length < 3) continue;
-
+    rows.each((_, row) => {
+      const cells = $(row).find('td');
+      if (cells.length < 3) return;
       const rawText = $(cells[0]).text().replace(/\s+/g, ' ').trim().toUpperCase();
-
       for (const [webKey, [dbName, resultTime]] of Object.entries(TARGET_MAPPING)) {
         if (rawText.includes(webKey) && rawText.includes(resultTime)) {
           const yesterdayVal = $(cells[1]).text().trim();
           const todayVal = $(cells[2]).text().trim();
-
-          // Fetch current record (if any)
-          const currentRecord = await Khabar.findOne({ resultName: dbName }).lean();
-
-          // Determine if we have a new/touching result
-          let isNew = false;
-          if (todayVal && todayVal !== '--') {
-            if (!currentRecord || currentRecord.todayResult !== todayVal) {
-              isNew = true;
-            }
-          }
-
-          if (isNew) {
-            // Reset "top" flag on all other documents
-            await Khabar.updateMany({}, { $set: { top: false } });
-            console.log(`🔥 New result detected for ${dbName}. Marking as top.`);
-          }
-
-          const updateData = {
-            resultName: dbName,
-            resultTime: resultTime,
-            lastResult: yesterdayVal,
-            todayResult: todayVal,
-            updatedAt: new Date()
-          };
-
-          if (isNew) {
-            updateData.top = true;
-          } else if (!currentRecord) {
-            // New document but not a changed result – default top false
-            updateData.top = false;
-          }
-
-          await Khabar.updateOne({ resultName: dbName }, { $set: updateData }, { upsert: true });
-          console.log(`✅ Updated ${dbName} | Today: ${todayVal}`);
+          scraped.push({ dbName, resultTime, yesterdayVal, todayVal });
         }
       }
+    });
+
+    if (scraped.length === 0) {
+      console.log('⚠️ No matching rows found');
+      return;
     }
+
+    // Load existing records in one query
+    const existingDocs = await Khabar.find({}).lean();
+    const existingMap = new Map(existingDocs.map(doc => [doc.resultName, doc]));
+
+    const bulkOps = [];
+    let newTopFound = false;
+    let newTopName = null;
+
+    // Determine updates
+    for (const item of scraped) {
+      const { dbName, resultTime, yesterdayVal, todayVal } = item;
+      const current = existingMap.get(dbName);
+      let isNew = false;
+      if (todayVal && todayVal !== '--') {
+        if (!current || current.todayResult !== todayVal) {
+          isNew = true;
+        }
+      }
+
+      if (isNew && !newTopFound) {
+        // First new result becomes the top entry
+        newTopFound = true;
+        newTopName = dbName;
+      }
+
+      const update = {
+        resultName: dbName,
+        resultTime: resultTime,
+        lastResult: yesterdayVal,
+        todayResult: todayVal,
+        updatedAt: new Date(),
+        top: isNew ? true : (current ? current.top : false)
+      };
+
+      // If this entry is not the new top but a later new result appears, ensure top is false
+      if (isNew && newTopFound && dbName !== newTopName) {
+        update.top = false;
+      }
+
+      bulkOps.push({
+        updateOne: {
+          filter: { resultName: dbName },
+          update: { $set: update },
+          upsert: true
+        }
+      });
+    }
+
+    // If a new top was found, clear top flag on all other docs in a single operation
+    if (newTopFound) {
+      bulkOps.push({
+        updateMany: {
+          filter: { resultName: { $ne: newTopName } },
+          update: { $set: { top: false } }
+        }
+      });
+      console.log(`🔥 New top result detected: ${newTopName}`);
+    }
+
+    // Execute bulk write (all updates / upserts in one round‑trip)
+    await Khabar.bulkWrite(bulkOps);
+    console.log('✅ Bulk update completed');
   } catch (err) {
     console.error('Error during SattaKing auto‑update:', err.message);
   }
@@ -102,3 +135,4 @@ if (require.main === module) {
 }
 
 module.exports = { autoUpdateSattaKing };
+
