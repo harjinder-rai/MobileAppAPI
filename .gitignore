@@ -1,1 +1,7 @@
 node_modules
+
+# Secrets — never commit
+.env
+.env.*
+*firebase-adminsdk*.json
+sattaking-250f8-firebase-adminsdk-xryse-ab4fa1522f.json

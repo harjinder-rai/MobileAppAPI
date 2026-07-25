@@ -23,6 +23,7 @@
     "dotenv": "^17.4.2",
     "express": "^4.17.1",
     "express-form-data": "^2.0.18",
+    "firebase-admin": "^14.2.0",
     "mongoose": "^9.5.0"
   }
 }
