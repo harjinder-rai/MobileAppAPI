@@ -106,6 +106,120 @@ async function fetchGameColumns() {
   throw lastErr || new Error('Failed to fetch game columns');
 }
 
+// ---------------------------------------------------------------------------
+// Fallback sources
+// If esattaking hasn't posted a game's result yet AND its result time has
+// already passed, we look the game up on backup sites (in order) and use the
+// first real value we find. Add more sources to FALLBACK_SOURCES as needed.
+// ---------------------------------------------------------------------------
+
+// Normalize a time to a tolerant key for matching: "05:00 AM" -> "500AM".
+const timeKey = (str) =>
+  String(str || '').toUpperCase().replace(/[^0-9APM]/g, '').replace(/^0+(\d)/, '$1');
+
+// Parse "09:30 PM" (in IST) to minutes-since-midnight; null if unparseable.
+function parseTimeToMinutes(str) {
+  const m = String(str || '').match(/(\d{1,2}):(\d{2})\s*(AM|PM)/i);
+  if (!m) return null;
+  let h = parseInt(m[1], 10) % 12;
+  if (/PM/i.test(m[3])) h += 12;
+  return h * 60 + parseInt(m[2], 10);
+}
+
+// Current time in IST (UTC+5:30) as minutes-since-midnight. The server may run
+// in UTC (e.g. Vercel), so we compute IST explicitly rather than trust TZ.
+function istMinutesNow() {
+  const now = new Date();
+  return (now.getUTCHours() * 60 + now.getUTCMinutes() + 330) % 1440;
+}
+
+// Has a game's declared result time already passed (in IST)?
+function resultTimePassed(timeStr) {
+  const t = parseTimeToMinutes(timeStr);
+  if (t == null) return true; // unknown time -> allow fallback
+  return istMinutesNow() >= t;
+}
+
+// Each source maps our DB name -> a matcher on that site: the name substring
+// plus the time THAT site displays for the game (times differ between sites).
+const FALLBACK_SOURCES = [
+  {
+    name: 'satta-king-fast.com',
+    url: 'https://satta-king-fast.com/',
+    map: {
+      'Deshawar(देशावर)': { key: 'DESAWAR', time: '05:00 AM' },
+      'Gali(गली)': { key: 'GALI', time: '11:25 PM' },
+      'Faridabad(फरीदाबाद)': { key: 'FARIDABAD', time: '06:00 PM' },
+      'Ghaziabad(ग़ज़िआबाद)': { key: 'GHAZIABAD', time: '09:25 PM' },
+      'HINDUSTAN': { key: 'HINDUSTAN', time: '05:10 PM' },
+      'GHAZIABAD DIN': { key: 'GHAZIABAD DIN', time: '04:35 PM' }
+    },
+    // Parse the page into rows: [{ text: UPPER, time: 'HH:MM AM', today }].
+    parse: ($) => {
+      const rows = [];
+      $('table.quick-result-board tr').each((_, tr) => {
+        const c = $(tr).find('td');
+        if (c.length < 3) return;
+        const text = $(c[0]).text().replace(/\s+/g, ' ').trim().toUpperCase();
+        const tm = text.match(/\d{1,2}:\d{2}\s*(AM|PM)/);
+        rows.push({ text, time: tm ? tm[0] : '', today: normalizeResult($(c[2]).text()) });
+      });
+      return rows;
+    }
+  }
+];
+
+// Fetch a URL to a cheerio document, with retries + rotating User-Agent.
+async function fetchHtml(url) {
+  let lastErr = null;
+  for (let attempt = 0; attempt < MAX_ATTEMPTS; attempt++) {
+    try {
+      const res = await axios.get(url, { headers: buildHeaders(attempt), timeout: 8000 });
+      return cheerio.load(res.data);
+    } catch (err) {
+      lastErr = err;
+      if (attempt < MAX_ATTEMPTS - 1) await sleep(1500 * (attempt + 1));
+    }
+  }
+  throw lastErr || new Error(`Failed to fetch ${url}`);
+}
+
+// Fill still-pending games from the fallback sources, in order. Mutates the
+// `scraped` items' todayVal in place. Only runs for games that are pending AND
+// whose result time has already passed (so we don't hit backups needlessly).
+async function applyFallbacks(scraped) {
+  let pending = scraped.filter((s) => s.todayVal === '--' && resultTimePassed(s.resultTime));
+  if (!pending.length) return;
+  console.log(`⏱️ ${pending.length} overdue pending game(s): ${pending.map((p) => p.dbName).join(', ')}`);
+
+  for (const source of FALLBACK_SOURCES) {
+    pending = pending.filter((s) => s.todayVal === '--');
+    if (!pending.length) break;
+    const applicable = pending.filter((s) => source.map[s.dbName]);
+    if (!applicable.length) continue;
+
+    let $;
+    try {
+      $ = await fetchHtml(source.url);
+    } catch (err) {
+      console.warn(`⚠️ Fallback "${source.name}" fetch failed: ${err.message}`);
+      continue;
+    }
+    const rows = source.parse($);
+
+    for (const s of applicable) {
+      const m = source.map[s.dbName];
+      const wantTime = timeKey(m.time);
+      const row = rows.find((r) => r.text.includes(m.key) && timeKey(r.time) === wantTime);
+      if (row && row.today && row.today !== '--') {
+        s.todayVal = row.today;
+        s.source = source.name;
+        console.log(`↩️ Fallback: ${s.dbName} = ${s.todayVal} (from ${source.name})`);
+      }
+    }
+  }
+}
+
 // Clean a stored game name for user-facing display: drop the Hindi suffix
 // (e.g. "Gali(गली)" -> "Gali") and title-case ALL-CAPS names
 // (e.g. "PUNE CITY" -> "Pune City").
@@ -187,6 +301,10 @@ async function autoUpdateSattaKing() {
     }
 
     console.log(`🔎 Scraped ${scraped.length} games: ${scraped.map(s => s.dbName).join(', ')}`);
+
+    // For any game esattaking hasn't posted yet (and whose time has passed),
+    // try the backup sources so results still reach users without delay.
+    await applyFallbacks(scraped);
 
     // Remove obsolete docs that no longer map to any current site game.
     if (process.env.DRY_RUN) {
