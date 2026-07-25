@@ -29,9 +29,18 @@ const NAME_OVERRIDES = {
   'GAZIYABAD': 'Ghaziabad(ग़ज़िआबाद)'
 };
 
-// Old docs that no longer correspond to any current site game. They are
-// removed once so they don't linger in the app as stale/duplicate entries.
-const OBSOLETE_NAMES = ['India King(इंडिया किंग)', 'Dubai Bazaar(दुबई बाज़ार)'];
+// Games to ignore entirely — never scraped, stored, or notified. Matched
+// against the UPPERCASED site name.
+const EXCLUDED_GAMES = new Set(['SATTA KING']);
+
+// Old/unwanted docs to remove so they don't linger in the app. Includes games
+// that no longer exist on the site plus any excluded games above (which use
+// their raw site name as the stored resultName).
+const OBSOLETE_NAMES = [
+  'India King(इंडिया किंग)',
+  'Dubai Bazaar(दुबई बाज़ार)',
+  ...EXCLUDED_GAMES
+];
 
 const URL = 'https://esattaking.in/';
 
@@ -157,6 +166,7 @@ async function autoUpdateSattaKing() {
     cols.each((_, el) => {
       const rawName = $(el).find('.matka-game').text().replace(/\s+/g, ' ').trim();
       if (!rawName) return;
+      if (EXCLUDED_GAMES.has(rawName.toUpperCase())) return; // skip unwanted games
       const resultTime = cleanTime($(el).find('.timefont').text());
       const nums = $(el).find('.matka-number')
         .map((_, n) => $(n).text().replace(/\s+/g, ' ').trim()).get();
