@@ -76,7 +76,7 @@ async function fetchGameColumns() {
     try {
       const response = await axios.get(URL, {
         headers: buildHeaders(attempt),
-        timeout: 15000
+        timeout: 8000 // keep a single attempt well under serverless function limits
       });
       const $ = cheerio.load(response.data);
       const cols = $('.matka-column');
@@ -105,7 +105,7 @@ async function notifyNewResults(results) {
     ? '🎯 New Satta Result!'
     : `🎯 ${results.length} New Satta Results!`;
 
-  await sendTopicNotification({
+  return sendTopicNotification({
     topic: FCM_TOPIC,
     title,
     body: summary,
@@ -120,7 +120,16 @@ async function notifyNewResults(results) {
   });
 }
 
+// Guard against overlapping runs (e.g. a 5-min cron firing again before a
+// slow run finishes) so we never double-write or send duplicate pushes.
+let updateInProgress = false;
+
 async function autoUpdateSattaKing() {
+  if (updateInProgress) {
+    console.log('⏭️ Skipped: an auto-update is already in progress');
+    return { skipped: true };
+  }
+  updateInProgress = true;
   try {
     const { $, cols } = await fetchGameColumns();
 
@@ -148,7 +157,7 @@ async function autoUpdateSattaKing() {
 
     if (scraped.length === 0) {
       console.log('⚠️ No game columns parsed (page present but empty)');
-      return;
+      return { ok: true, scraped: 0, new: 0 };
     }
 
     console.log(`🔎 Scraped ${scraped.length} games: ${scraped.map(s => s.dbName).join(', ')}`);
@@ -243,7 +252,7 @@ async function autoUpdateSattaKing() {
     // DRY_RUN=1 previews the planned writes without touching the DB.
     if (process.env.DRY_RUN) {
       console.log(`🧪 DRY_RUN: ${bulkOps.length} op(s) planned, ${changed.length} new — no DB write performed`);
-      return;
+      return { ok: true, dryRun: true, scraped: scraped.length, new: newResults.length };
     }
 
     // Execute bulk write (all updates / upserts in one round‑trip)
@@ -252,13 +261,19 @@ async function autoUpdateSattaKing() {
 
     // Notify subscribed users only when a genuinely new result was written.
     // Runs after the DB write so a push failure can never block the update.
+    let notified = false;
     if (newResults.length) {
-      await notifyNewResults(newResults);
+      const push = await notifyNewResults(newResults);
+      notified = !!(push && push.messageId);
     }
+    return { ok: true, scraped: scraped.length, new: newResults.length, results: newResults, notified };
   } catch (err) {
     // A thrown error here means the scrape ultimately failed (after retries) —
     // this is a FAILURE, distinct from "no new result".
     console.error('❌ SattaKing auto‑update FAILED (scrape/DB error):', err.message);
+    return { ok: false, error: err.message };
+  } finally {
+    updateInProgress = false;
   }
 }
 
