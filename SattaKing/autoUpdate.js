@@ -97,18 +97,34 @@ async function fetchGameColumns() {
   throw lastErr || new Error('Failed to fetch game columns');
 }
 
+// Clean a stored game name for user-facing display: drop the Hindi suffix
+// (e.g. "Gali(गली)" -> "Gali") and title-case ALL-CAPS names
+// (e.g. "PUNE CITY" -> "Pune City").
+function displayName(name) {
+  const base = String(name).replace(/\s*\(.*?\)\s*/g, ' ').trim();
+  return base === base.toUpperCase()
+    ? base.toLowerCase().replace(/\b\w/g, (c) => c.toUpperCase())
+    : base;
+}
+
 // Build and send a single push summarizing the new result(s) for this run.
 // Failures are swallowed inside sendTopicNotification, so this never throws.
+// Copy is Hinglish for engagement, with the number shown in the title.
 async function notifyNewResults(results) {
-  const summary = results.map(r => `${r.name}: ${r.result}`).join(', ');
-  const title = results.length === 1
-    ? '🎯 New Satta Result!'
-    : `🎯 ${results.length} New Satta Results!`;
+  const list = results.map((r) => `${displayName(r.name)}: ${r.result}`).join(', ');
+  const isSingle = results.length === 1;
+
+  const title = isSingle
+    ? `${displayName(results[0].name)} ka result aa gaya! 🎯`
+    : `${results.length} naye result aa gaye! 🎯`;
+  const body = isSingle
+    ? `${displayName(results[0].name)}: ${results[0].result} — abhi sabhi results dekhein`
+    : list;
 
   return sendTopicNotification({
     topic: FCM_TOPIC,
     title,
-    body: summary,
+    body,
     data: {
       type: 'result_update',
       count: results.length,
