@@ -234,15 +234,17 @@ function displayName(name) {
 // Failures are swallowed inside sendTopicNotification, so this never throws.
 // Copy is Hinglish for engagement, with the number shown in the title.
 async function notifyNewResults(results) {
-  const list = results.map((r) => `${displayName(r.name)}: ${r.result}`).join(', ');
+  const names = results.map((r) => displayName(r.name)).join(', ');
   const isSingle = results.length === 1;
 
+  // Result number is intentionally NOT shown — we only announce that it's
+  // declared, to drive the user to open the app. The number is still in `data`.
   const title = isSingle
-    ? `${displayName(results[0].name)} ka result aa gaya! 🎯`
-    : `${results.length} naye result aa gaye! 🎯`;
+    ? `${displayName(results[0].name)} ka result declare ho gaya! 🎯`
+    : `${results.length} games ke result declare ho gaye! 🎯`;
   const body = isSingle
-    ? `${displayName(results[0].name)}: ${results[0].result} — abhi sabhi results dekhein`
-    : list;
+    ? `Result out ho chuka hai 👉 abhi app mein check karein`
+    : `${names} ka result aa gaya — abhi dekhein 👉`;
 
   return sendTopicNotification({
     topic: FCM_TOPIC,
