@@ -2,8 +2,49 @@ const axios = require("axios");
 const cheerio = require("cheerio");
 const mongoose = require("mongoose");
 require("dotenv").config();
+// FCM push helper (shared) — notifies subscribed users when a result updates.
+const { sendTopicNotification } = require("./firebase");
 
 const DPBOSS_URL = "https://dpboss.boston/";
+
+// Mobile app must subscribe devices to this topic. Overridable via env.
+const KALYAN_FCM_TOPIC = process.env.KALYANKING_FCM_TOPIC || "kalyanking_results";
+
+// Clean a game name for display: strip "(...)" and title-case ALL-CAPS names.
+function displayGameName(name) {
+  const base = String(name).replace(/\s*\(.*?\)\s*/g, " ").trim();
+  return base === base.toUpperCase()
+    ? base.toLowerCase().replace(/\b\w/g, (c) => c.toUpperCase())
+    : base;
+}
+
+// Announce that result(s) are declared — no number shown, to drive app opens.
+// Copy matches the SattaKing style. Never throws (errors handled by caller).
+async function notifyKalyanResults(results) {
+  const names = results.map((r) => displayGameName(r.gameName)).join(", ");
+  const isSingle = results.length === 1;
+
+  const title = isSingle
+    ? `${displayGameName(results[0].gameName)} ka result declare ho gaya! 🎯`
+    : `${results.length} games ke result declare ho gaye! 🎯`;
+  const body = isSingle
+    ? `Result out ho chuka hai 👉 abhi app mein check karein`
+    : `${names} ka result aa gaya — abhi dekhein 👉`;
+
+  return sendTopicNotification({
+    topic: KALYAN_FCM_TOPIC,
+    title,
+    body,
+    data: {
+      type: "kalyan_result_update",
+      count: results.length,
+      results: JSON.stringify(
+        results.map((r) => ({ name: displayGameName(r.gameName), result: r.result }))
+      ),
+      game: displayGameName(results[0].gameName),
+    },
+  });
+}
 
 const resultSchema = new mongoose.Schema(
   {
@@ -237,8 +278,24 @@ async function updateKalyanResults() {
     );
   }
 
+  // ── Push notification (additive; does not affect the update logic above) ──
+  // Notify only for genuinely declared results — skip "Loading" placeholders.
+  const notifiable = updatedResults.filter(
+    (r) => r.result && cleanText(r.result) !== "Loading"
+  );
+  let notified = false;
+  if (notifiable.length > 0) {
+    try {
+      const push = await notifyKalyanResults(notifiable);
+      notified = !!(push && push.messageId);
+    } catch (error) {
+      console.error("Kalyan push notification failed:", error.message);
+    }
+  }
+
   return {
     updatedCount: updatedResults.length,
+    notified,
     updatedResults,
     debug: {
       collectionName: Result.collection.name,
