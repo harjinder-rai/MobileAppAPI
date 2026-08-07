@@ -108,9 +108,16 @@ function isResultValue(text) {
 
 // ── Auto-discovery of new markets ──────────────────────────────────────────
 // The updater used to skip any scraped market that wasn't already in the DB,
-// so a market the source added stayed invisible until someone inserted it by
-// hand. We now insert them automatically. Set AUTO_ADD_MARKETS=false to disable.
-const AUTO_ADD_MARKETS = String(process.env.AUTO_ADD_MARKETS ?? "true") !== "false";
+// so a market the source added stayed invisible until someone inserted it.
+//
+// OFF BY DEFAULT, DELIBERATELY. The source publishes ~163 markets against the
+// ~18 we curate. Blanket auto-add would take the app from 18 to 160 markets and
+// bury Kalyan — the exact opposite of what this app is for. Coverage is grown
+// deliberately via scripts/addMarkets.js instead.
+//
+// Set AUTO_ADD_MARKETS=true only if you genuinely want every market the source
+// publishes, and check GET /KalyanKing/probeSource first to see what that means.
+const AUTO_ADD_MARKETS = String(process.env.AUTO_ADD_MARKETS ?? "false") === "true";
 
 // A scraped entry has to look like a real market before we persist it — the
 // source is HTML we don't control, so a layout change could otherwise flood the
