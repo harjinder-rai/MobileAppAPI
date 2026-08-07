@@ -6,7 +6,8 @@ const {
   getLuckyNumber,
   autoUpdateLiveResult,
   getTestingLiveResults,
-  getHistoricalData
+  getHistoricalData,
+  probeSource
 } = require("../controller");
 
 router.get("/liveResults", getLiveResults);
@@ -21,6 +22,9 @@ router.get("/historicalData", getHistoricalData);
 router.get("/autoUpdateResult", autoUpdateLiveResult);
 
 router.get("/testingLiveResults", getTestingLiveResults);
+
+// Read-only diagnostic — see which markets the source has that we don't store.
+router.get("/probeSource", probeSource);
 
 module.exports = router;
 

@@ -220,6 +220,45 @@ async function scrapeDpbossResults() {
   return results;
 }
 
+/**
+ * Diff what the source publishes against what we store, WITHOUT writing.
+ *
+ * The scrape source blocks residential IPs (it answers Vercel's datacenter IPs
+ * but times out locally), so scripts/probeSource.js can't run from a dev
+ * machine. This runs the same diff server-side, where the scraper already works.
+ */
+async function probeSourceVsDatabase() {
+  await ensureMongoConnected();
+
+  const scraped = await scrapeDpbossResults();
+  const stored = await Result.find({}, "gameName priority").lean();
+
+  const storedNames = new Set(stored.map((doc) => normalizeName(doc.gameName)));
+  const scrapedNames = new Set(scraped.map((row) => normalizeName(row.gameName)));
+
+  const addable = scraped.filter((row) => !storedNames.has(normalizeName(row.gameName)));
+
+  return {
+    sourceCount: scraped.length,
+    storedCount: stored.length,
+    autoAddEnabled: AUTO_ADD_MARKETS,
+    // Published by the source but not stored — auto-add will insert these on the
+    // next run, provided they pass isPlausibleNewMarket().
+    addable: addable.map((row) => ({
+      gameName: row.gameName,
+      openTime: row.openTime,
+      closeTime: row.closeTime,
+      result: row.result,
+      wouldBeAdded: isPlausibleNewMarket(row),
+    })),
+    // Stored but no longer published — these will never auto-update again.
+    orphaned: stored
+      .filter((doc) => !scrapedNames.has(normalizeName(doc.gameName)))
+      .map((doc) => doc.gameName),
+    sourceMarkets: scraped.map((row) => row.gameName),
+  };
+}
+
 async function updateKalyanResults() {
   await ensureMongoConnected();
 
@@ -422,6 +461,7 @@ if (require.main === module) {
 module.exports = {
   updateKalyanResults,
   getTestingLiveResults,
+  probeSourceVsDatabase,
   // exported for scripts/verifyAutoAdd.js
   isPlausibleNewMarket,
 };

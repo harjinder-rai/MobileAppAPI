@@ -4,6 +4,7 @@ const HistoricalChart = require('../modals/historicalchart.model');
 const {
   updateKalyanResults,
   getTestingLiveResults: getTestingLiveResultsFromCollection,
+  probeSourceVsDatabase,
 } = require("../../KalyanAutoUpdateResult");
 
 const getLiveResults = async (req, res) => {
@@ -128,7 +129,20 @@ const getTestingLiveResults = async (req, res) => {
   }
 };
 
+// Read-only diagnostic: which markets the source publishes that we don't store.
+// Runs server-side because the source blocks non-datacenter IPs. Writes nothing.
+const probeSource = async (req, res) => {
+  try {
+    const report = await probeSourceVsDatabase();
+    return res.status(200).json(report);
+  } catch (error) {
+    console.error("Probe source failed:", error.message);
+    return res.status(500).json({ message: "Probe source failed", error: error.message });
+  }
+};
+
 module.exports = {
+  probeSource,
   getLiveResults,
   updateLiveResult,
   getLuckyNumber,

@@ -107,6 +107,27 @@ async function scrape() {
 
   await mongoose.disconnect();
 })().catch((e) => {
-  console.error('Probe failed:', e.message);
+  const blocked =
+    e.code === 'ECONNABORTED' ||
+    e.code === 'ETIMEDOUT' ||
+    /timeout/i.test(e.message || '');
+
+  console.error('\nProbe failed:', e.message);
+
+  if (blocked) {
+    console.error(
+      [
+        '',
+        'The source blocks non-datacenter IPs — it answers Vercel but times out',
+        'from home/office connections. The production scraper is unaffected.',
+        '',
+        'Run the same diff server-side instead:',
+        '',
+        '  curl -s https://mobile-app-api-opal.vercel.app/KalyanKing/probeSource | python3 -m json.tool',
+        '',
+        '(requires the backend to be deployed with the probeSource route)',
+      ].join('\n'),
+    );
+  }
   process.exit(1);
 });
