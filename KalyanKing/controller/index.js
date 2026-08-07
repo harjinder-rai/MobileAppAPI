@@ -7,8 +7,12 @@ const {
 } = require("../../KalyanAutoUpdateResult");
 
 const getLiveResults = async (req, res) => {
+  // priority = persistent importance tier; isTop = whichever result landed most
+  // recently. The app re-sorts by result time on the client (a market that is
+  // live right now outranks one that closed hours ago), so this ordering is the
+  // fallback for older builds and the admin view.
   LiveResult.find()
-    .sort({ isTop: -1 })
+    .sort({ priority: -1, isTop: -1 })
     .then((items) => {
       return res.status(200).json({ liveResults: items });
     })
