@@ -53,6 +53,9 @@ const resultSchema = new mongoose.Schema(
     closeTime: String,
     result: String,
     isTop: Boolean,
+    // Importance tier — set once via scripts/setMarketPriority.js and never
+    // written by the updater, so result scrapes can't clobber it.
+    priority: Number,
   },
   { timestamps: true }
 );
@@ -101,6 +104,29 @@ function isResultValue(text) {
   const value = cleanText(text);
 
   return value === "Loading..." || value === "Loading" || /^\d[\d-]*$/.test(value);
+}
+
+// ── Auto-discovery of new markets ──────────────────────────────────────────
+// The updater used to skip any scraped market that wasn't already in the DB,
+// so a market the source added stayed invisible until someone inserted it by
+// hand. We now insert them automatically. Set AUTO_ADD_MARKETS=false to disable.
+const AUTO_ADD_MARKETS = String(process.env.AUTO_ADD_MARKETS ?? "true") !== "false";
+
+// A scraped entry has to look like a real market before we persist it — the
+// source is HTML we don't control, so a layout change could otherwise flood the
+// collection with junk documents.
+function isPlausibleNewMarket(scraped) {
+  const name = cleanText(scraped.gameName);
+
+  if (name.length < 3 || name.length > 40) return false;
+  // Names are letters/digits/spaces/&/-/() — anything else is parser noise.
+  if (!/^[A-Za-z0-9 ()&.\-]+$/.test(name)) return false;
+  // Both times must have parsed, otherwise time-based ordering can't place it.
+  if (!scraped.openTime || !scraped.closeTime) return false;
+  // Don't create a market from a placeholder; wait for a real result.
+  if (!scraped.result || cleanText(scraped.result) === "Loading") return false;
+
+  return true;
 }
 
 async function getTestingLiveResults() {
@@ -213,10 +239,38 @@ async function updateKalyanResults() {
   const updatedResults = [];
   let firstUpdated = true;
 
+  // Markets the source publishes that we've never stored. Collected here and
+  // inserted after the update loop so they appear from the next fetch onward.
+  const newMarkets = [];
+  const rejectedNewMarkets = [];
+  const seenNewNames = new Set();
+
   for (const scrapedResult of scrapedResults) {
     const matchedDoc = existingByName.get(normalizeName(scrapedResult.gameName));
 
     if (!matchedDoc) {
+      if (!AUTO_ADD_MARKETS) continue;
+
+      const key = normalizeName(scrapedResult.gameName);
+      // The source can list the same market twice (e.g. a highlights block).
+      if (seenNewNames.has(key)) continue;
+      seenNewNames.add(key);
+
+      if (!isPlausibleNewMarket(scrapedResult)) {
+        rejectedNewMarkets.push(scrapedResult.gameName);
+        continue;
+      }
+
+      newMarkets.push({
+        gameName: cleanText(scrapedResult.gameName),
+        openTime: scrapedResult.openTime,
+        closeTime: scrapedResult.closeTime,
+        result: scrapedResult.result,
+        isTop: false,
+        // Untiered on purpose: a newly discovered market sorts below the curated
+        // ones until someone assigns it a tier via scripts/setMarketPriority.js.
+        priority: 0,
+      });
       continue;
     }
 
@@ -278,6 +332,45 @@ async function updateKalyanResults() {
     );
   }
 
+  // Insert markets the source publishes but we've never stored. Upsert rather
+  // than insert so two overlapping runs can't create duplicates, and
+  // $setOnInsert so an existing document is never overwritten by this path.
+  let addedMarketNames = [];
+  if (newMarkets.length > 0) {
+    const addResult = await Result.bulkWrite(
+      newMarkets.map((market) => ({
+        updateOne: {
+          filter: { gameName: market.gameName },
+          update: { $setOnInsert: market },
+          upsert: true,
+        },
+      })),
+      { ordered: false }
+    );
+
+    // Only report rows Mongo actually created. upsertedIds is keyed by the
+    // index of the operation that inserted, so a partial insert (some names
+    // already present) reports just the genuinely new ones.
+    addedMarketNames = Object.keys(addResult.upsertedIds || {})
+      .map((index) => newMarkets[Number(index)])
+      .filter(Boolean)
+      .map((market) => market.gameName);
+
+    if (addedMarketNames.length > 0) {
+      console.log(
+        `[auto-add] discovered ${addedMarketNames.length} new market(s):`,
+        addedMarketNames.join(", "),
+        "— assign tiers with scripts/setMarketPriority.js"
+      );
+    }
+  }
+  if (rejectedNewMarkets.length > 0) {
+    console.log(
+      `[auto-add] skipped ${rejectedNewMarkets.length} implausible entr(y/ies):`,
+      rejectedNewMarkets.join(", ")
+    );
+  }
+
   // ── Push notification (additive; does not affect the update logic above) ──
   // Notify only for genuinely declared results — skip "Loading" placeholders.
   const notifiable = updatedResults.filter(
@@ -297,7 +390,11 @@ async function updateKalyanResults() {
     updatedCount: updatedResults.length,
     notified,
     updatedResults,
+    addedCount: addedMarketNames.length,
+    addedMarkets: addedMarketNames,
     debug: {
+      autoAddEnabled: AUTO_ADD_MARKETS,
+      rejectedNewMarkets,
       collectionName: Result.collection.name,
       dbName: Result.db.name,
       existingCount: existingDocs.length,
@@ -322,4 +419,9 @@ if (require.main === module) {
     });
 }
 
-module.exports = { updateKalyanResults, getTestingLiveResults };
+module.exports = {
+  updateKalyanResults,
+  getTestingLiveResults,
+  // exported for scripts/verifyAutoAdd.js
+  isPlausibleNewMarket,
+};
